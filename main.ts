@@ -1,106 +1,143 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 
-const CDN_BASE = "https://cdn.mydomain.com/videos"; // Change to your CDN or storage link
-const SECRET = "mysecretkey"; // Change this for security
+const SECRET = "proxysecret"; // change this if you want
+const BASE_URL = "https://your-app-name.deno.dev"; // your Deno Deploy URL
 
-function generateToken(id: string) {
-  const expiry = Date.now() + 1000 * 60 * 10; // 10 min valid
-  return btoa(`${id}.${expiry}.${SECRET}`);
+function generateToken(url: string) {
+  const expiry = Date.now() + 1000 * 60 * 10; // valid 10 mins
+  return btoa(`${url}.${expiry}.${SECRET}`);
+}
+
+function verifyToken(token: string, url: string) {
+  try {
+    const decoded = atob(token);
+    const [origUrl, expiry, secret] = decoded.split(".");
+    return origUrl === url && secret === SECRET && Number(expiry) > Date.now();
+  } catch {
+    return false;
+  }
 }
 
 serve((req) => {
-  const url = new URL(req.url);
-  const pathname = url.pathname;
+  const { pathname, searchParams } = new URL(req.url);
 
-  // API for /generate?id=abc123
-  if (pathname === "/generate") {
-    const id = url.searchParams.get("id");
-    if (!id) return new Response("❌ Missing ID", { status: 400 });
+  // ✅ Home Page (UI)
+  if (pathname === "/") {
+    return new Response(
+      `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Video Proxy Generator</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #0d1117;
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+  }
+  .card {
+    background: #161b22;
+    padding: 30px;
+    border-radius: 16px;
+    box-shadow: 0 0 15px rgba(255,255,255,0.1);
+    text-align: center;
+    width: 90%;
+    max-width: 420px;
+  }
+  h2 {
+    margin-bottom: 15px;
+  }
+  input {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    font-size: 15px;
+  }
+  button {
+    background: #1f6feb;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 10px;
+    color: white;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  button:hover { background: #2d8cff; }
+  p {
+    margin-top: 15px;
+    word-wrap: break-word;
+    color: #58a6ff;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h2>🎬 Video Proxy Link Generator</h2>
+    <input type="text" id="videoUrl" placeholder="Enter full video link (https://...)" />
+    <button onclick="generate()">Generate</button>
+    <p id="result"></p>
+  </div>
 
-    const token = generateToken(id);
-    const redirectURL = `${CDN_BASE}/${id}.mp4?token=${token}`;
-    const fullLink = `${url.origin}/watch/${id}`;
-
-    const html = `
-      <!doctype html>
-      <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <title>Video Link Generated</title>
-        <style>
-          body { font-family: Arial, sans-serif; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; background:#0d1117; color:#fff; }
-          .box { background:#161b22; padding:25px 35px; border-radius:16px; box-shadow:0 0 12px rgba(255,255,255,0.1); text-align:center; width:90%; max-width:450px; }
-          input { width:100%; padding:10px; border-radius:8px; border:none; margin:10px 0; background:#222; color:#fff; }
-          button { padding:10px 20px; border:none; border-radius:8px; background:#2f81f7; color:white; cursor:pointer; font-size:16px; transition:0.2s; }
-          button:hover { background:#1b61d1; }
-          .link-box { margin-top:20px; word-break:break-all; background:#222; padding:10px; border-radius:8px; }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <h2>✅ Video Link Generated</h2>
-          <div class="link-box">${redirectURL}</div>
-          <p style="margin-top:15px;">(This link is valid for 10 minutes)</p>
-          <button onclick="navigator.clipboard.writeText('${redirectURL}');alert('Copied!')">Copy Link</button>
-          <br><br>
-          <a href="/" style="color:#2f81f7;text-decoration:none;">← Generate another</a>
-        </div>
-      </body>
-      </html>
-    `;
-    return new Response(html, { headers: { "content-type": "text/html" } });
+  <script>
+    function generate() {
+      const url = document.getElementById('videoUrl').value.trim();
+      const result = document.getElementById('result');
+      if (!url.startsWith('https://')) {
+        result.style.color = 'red';
+        result.textContent = '⚠️ Please enter a valid https:// video link';
+        return;
+      }
+      const gen = window.location.origin + '/proxy?url=' + encodeURIComponent(url);
+      result.style.color = '#58a6ff';
+      result.innerHTML = '<b>Proxy Link:</b><br>' + gen + '<br><br><button onclick="copyLink()">Copy</button>';
+      window.copyText = gen;
+    }
+    function copyLink() {
+      navigator.clipboard.writeText(window.copyText);
+      alert('Copied!');
+    }
+  </script>
+</body>
+</html>
+      `,
+      { headers: { "content-type": "text/html" } }
+    );
   }
 
-  // Redirect handler
-  if (pathname.startsWith("/watch/")) {
-    const id = pathname.split("/")[2];
-    if (!id) return new Response("Missing ID", { status: 400 });
+  // ✅ Proxy route
+  if (pathname === "/proxy") {
+    const url = searchParams.get("url");
+    if (!url) return new Response("Missing video URL", { status: 400 });
 
-    const token = generateToken(id);
-    const redirectURL = `${CDN_BASE}/${id}.mp4?token=${token}`;
+    const token = generateToken(url);
+    const redirect = `${BASE_URL}/watch?url=${encodeURIComponent(url)}&token=${token}`;
+    return new Response(null, { status: 302, headers: { Location: redirect } });
+  }
+
+  // ✅ Watch route (actual redirect to real video)
+  if (pathname === "/watch") {
+    const url = searchParams.get("url");
+    const token = searchParams.get("token");
+    if (!url || !token) return new Response("Missing params", { status: 400 });
+
+    if (!verifyToken(token, url)) {
+      return new Response("Invalid or expired token", { status: 401 });
+    }
+
     return new Response(null, {
       status: 302,
-      headers: { Location: redirectURL },
+      headers: { Location: url },
     });
   }
 
-  // Home page (UI)
-  const html = `
-    <!doctype html>
-    <html lang="en">
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width,initial-scale=1" />
-      <title>Video Redirect Generator</title>
-      <style>
-        body { font-family: Arial, sans-serif; background:#0d1117; color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; margin:0; }
-        .box { background:#161b22; padding:25px 35px; border-radius:16px; box-shadow:0 0 12px rgba(255,255,255,0.1); text-align:center; width:90%; max-width:450px; }
-        input { width:100%; padding:10px; border-radius:8px; border:none; margin:10px 0; background:#222; color:#fff; font-size:16px; text-align:center; }
-        button { padding:10px 20px; border:none; border-radius:8px; background:#2f81f7; color:white; cursor:pointer; font-size:16px; transition:0.2s; width:100%; }
-        button:hover { background:#1b61d1; }
-        h2 { margin-bottom:10px; }
-      </style>
-    </head>
-    <body>
-      <div class="box">
-        <h2>🎬 Video Redirect Generator</h2>
-        <form onsubmit="generate(event)">
-          <input id="id" placeholder="Enter video ID (e.g. abc123)" required />
-          <button type="submit">Generate Link</button>
-        </form>
-      </div>
-
-      <script>
-        function generate(e) {
-          e.preventDefault();
-          const id = document.getElementById('id').value.trim();
-          if (!id) return alert('Please enter a video ID!');
-          location.href = '/generate?id=' + encodeURIComponent(id);
-        }
-      </script>
-    </body>
-    </html>
-  `;
-  return new Response(html, { headers: { "content-type": "text/html" } });
+  return new Response("Not found", { status: 404 });
 });
